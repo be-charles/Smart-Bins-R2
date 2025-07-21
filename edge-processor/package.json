@@ -1,0 +1,35 @@
+{
+  "name": "smart-bins-edge-processor",
+  "version": "1.0.0",
+  "description": "Edge processing node for IoT inventory management system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "setup": "npm install && node setup.js"
+  },
+  "keywords": [
+    "iot",
+    "mqtt",
+    "inventory",
+    "edge-computing",
+    "streamsheets"
+  ],
+  "author": "Smart Bins R2",
+  "license": "MIT",
+  "dependencies": {
+    "mqtt": "^5.3.4",
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "ws": "^8.14.2",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Bins R2 - Edge Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .status-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            flex: 1;
+            min-width: 200px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-card h3 {
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .scales-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .scale-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }
+
+        .scale-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .scale-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .scale-id {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .scale-status {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .status-online {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .status-offline {
+            background: #f44336;
+            color: white;
+        }
+
+        .scale-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .metric-unit {
+            font-size: 14px;
+            color: #666;
+            margin-left: 2px;
+        }
+
+        .location {
+            color: #666;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+
+        .last-update {
+            color: #999;
+            font-size: 12px;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 18px;
+        }
+
+        .error {
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .status-bar {
+                flex-direction: column;
+            }
+            
+            .scale-metrics {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏭 Smart Bins R2 - Edge Dashboard</h1>
+            <p>Real-time inventory monitoring from IoT scales</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-card">
+                <h3>Active Scales</h3>
+                <div class="value" id="activeScales">-</div>
+            </div>
+            <div class="status-card">
+                <h3>Total Items</h3>
+                <div class="value" id="totalItems">-</div>
+            </div>
+            <div class="status-card">
+                <h3>Cloud Status</h3>
+                <div class="value" id="cloudStatus">-</div>
+            </div>
+            <div class="status-card">
+                <h3>Last Update</h3>
+                <div class="value" id="lastUpdate">-</div>
+            </div>
+        </div>
+
+        <div id="errorContainer"></div>
+        <div id="loadingContainer" class="loading">Loading scales...</div>
+        <div id="scalesContainer" class="scales-grid"></div>
+    </div>
+
+    <script>
+        class EdgeDashboard {
+            constructor() {
+                this.scales = new Map();
+                this.init();
+            }
+
+            async init() {
+                await this.loadDashboardData();
+                setInterval(() => this.loadDashboardData(), 5000); // Update every 5 seconds
+            }
+
+            async loadDashboardData() {
+                try {
+                    const response = await fetch('/api/dashboard');
+                    if (!response.ok) throw new Error('Failed to fetch data');
+                    
+                    const data = await response.json();
+                    this.updateDashboard(data);
+                    this.hideError();
+                    
+                } catch (error) {
+                    console.error('Error loading dashboard data:', error);
+                    this.showError('Failed to load dashboard data. Please check your connection.');
+                }
+            }
+
+            updateDashboard(data) {
+                // Update status bar
+                document.getElementById('activeScales').textContent = data.length;
+                
+                const totalItems = data.reduce((sum, scale) => sum + (scale.item_count || 0), 0);
+                document.getElementById('totalItems').textContent = totalItems;
+                
+                document.getElementById('cloudStatus').textContent = 'Connected';
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+
+                // Update scales
+                this.renderScales(data);
+                
+                // Hide loading
+                document.getElementById('loadingContainer').style.display = 'none';
+            }
+
+            renderScales(scales) {
+                const container = document.getElementById('scalesContainer');
+                
+                if (scales.length === 0) {
+                    container.innerHTML = '<div class="loading">No scales found. Make sure your ESP32 devices are connected and sending data.</div>';
+                    return;
+                }
+
+                container.innerHTML = scales.map(scale => this.createScaleCard(scale)).join('');
+            }
+
+            createScaleCard(scale) {
+                const lastReading = new Date(scale.last_reading);
+                const isOnline = (Date.now() - scale.last_reading) < 60000; // Online if updated within 1 minute
+                
+                return `
+                    <div class="scale-card">
+                        <div class="scale-header">
+                            <div class="scale-id">${scale.scale_id}</div>
+                            <div class="scale-status ${isOnline ? 'status-online' : 'status-offline'}">
+                                ${isOnline ? 'Online' : 'Offline'}
+                            </div>
+                        </div>
+                        
+                        <div class="scale-metrics">
+                            <div class="metric">
+                                <div class="metric-label">Weight</div>
+                                <div class="metric-value">
+                                    ${(scale.weight_kg || 0).toFixed(1)}
+                                    <span class="metric-unit">kg</span>
+                                </div>
+                            </div>
+                            <div class="metric">
+                                <div class="metric-label">Items</div>
+                                <div class="metric-value">
+                                    ${scale.item_count || 0}
+                                    <span class="metric-unit">pcs</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="location">
+                            📍 ${scale.location} - ${scale.item_type || 'Unknown Items'}
+                        </div>
+                        
+                        <div class="last-update">
+                            Last update: ${lastReading.toLocaleString()}
+                        </div>
+                    </div>
+                `;
+            }
+
+            showError(message) {
+                const container = document.getElementById('errorContainer');
+                container.innerHTML = `<div class="error">${message}</div>`;
+            }
+
+            hideError() {
+                document.getElementById('errorContainer').innerHTML = '';
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new EdgeDashboard();
+        });
+    </script>
+</body>
+</html>
