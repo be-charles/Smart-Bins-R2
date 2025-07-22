@@ -78,6 +78,10 @@ Thumbs.db
 *.elf
 *.map
 
+# ESP32 Configuration files (contain sensitive data)
+esp32-firmware/config.h
+esp32-firmware/secrets.h
+
 # Backup files
 *.bak
 *.backup
