@@ -94,3 +94,4 @@ cloud-setup/mosquitto/log/
 
 # Edge processor specific
 edge-processor/data/
+STREAMSHEETS_FIX.md
