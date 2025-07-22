@@ -42,13 +42,13 @@ chmod +x clean-reinstall.sh
 After successful reinstall:
 
 ### ✅ Working Services
-- **Streamsheets**: Available at `http://your-ip:8080`
+- **Streamsheets**: Available at `http://your-ip:8081`
 - **Mosquitto**: Running without restart loops
 - **All containers**: Status should be "Up"
 
 ### ✅ Fixed Login
 - **Username**: `admin`
-- **Password**: `changeme123`
+- **Password**: `1234`
 - **No more installation loops**
 
 ### ✅ Persistent Data
@@ -71,9 +71,9 @@ After successful reinstall:
    ```
 
 3. **Test web access**:
-   - Go to `http://your-droplet-ip:8080`
+   - Go to `http://your-droplet-ip:8081`
    - Should load without 502 errors
-   - Login with admin/changeme123
+   - Login with admin/1234
 
 4. **Test persistence**:
    ```bash
@@ -101,7 +101,7 @@ sudo systemctl status docker
 ### Still Getting 502 Errors
 ```bash
 # Check if ports are in use
-netstat -tulpn | grep :8080
+netstat -tulpn | grep :8081
 
 # Restart Docker service
 sudo systemctl restart docker
@@ -114,12 +114,12 @@ sudo systemctl restart docker
 1. **Change default password**:
    - Go to Administration → Users
    - Select admin user
-   - Change password from `changeme123`
+   - Change password from `1234`
 
 2. **Configure firewall** (if not done):
    ```bash
    ufw allow ssh
-   ufw allow 8080
+   ufw allow 8081
    ufw allow 1883
    ufw --force enable
    ```
@@ -136,7 +136,7 @@ sudo systemctl restart docker
 ## Success Indicators
 
 ✅ **No installation wizard** - Direct login page
-✅ **admin/changeme123 works** - No credential issues  
+✅ **admin/1234 works** - No credential issues  
 ✅ **All containers "Up"** - No restart loops
 ✅ **Demo sheets work** - No system resets
 ✅ **Data persists** - Survives container restarts
