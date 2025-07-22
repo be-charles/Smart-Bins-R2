@@ -71,6 +71,18 @@
             color: #4CAF50;
         }
 
+        .status-connected {
+            color: #4CAF50 !important;
+        }
+
+        .status-disconnected {
+            color: #f44336 !important;
+        }
+
+        .status-reconnecting {
+            color: #ff9800 !important;
+        }
+
         .scales-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -230,7 +242,9 @@
 
             async init() {
                 await this.loadDashboardData();
+                await this.loadCloudStatus();
                 setInterval(() => this.loadDashboardData(), 5000); // Update every 5 seconds
+                setInterval(() => this.loadCloudStatus(), 3000); // Update cloud status every 3 seconds
             }
 
             async loadDashboardData() {
@@ -248,6 +262,20 @@
                 }
             }
 
+            async loadCloudStatus() {
+                try {
+                    const response = await fetch('/api/status');
+                    if (!response.ok) throw new Error('Failed to fetch status');
+                    
+                    const status = await response.json();
+                    this.updateCloudStatus(status.cloud);
+                    
+                } catch (error) {
+                    console.error('Error loading cloud status:', error);
+                    this.updateCloudStatus({ connected: false, lastError: 'Network error' });
+                }
+            }
+
             updateDashboard(data) {
                 // Update status bar
                 document.getElementById('activeScales').textContent = data.length;
@@ -255,7 +283,6 @@
                 const totalItems = data.reduce((sum, scale) => sum + (scale.item_count || 0), 0);
                 document.getElementById('totalItems').textContent = totalItems;
                 
-                document.getElementById('cloudStatus').textContent = 'Connected';
                 document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
 
                 // Update scales
@@ -263,6 +290,36 @@
                 
                 // Hide loading
                 document.getElementById('loadingContainer').style.display = 'none';
+            }
+
+            updateCloudStatus(cloudStatus) {
+                const statusElement = document.getElementById('cloudStatus');
+                
+                // Remove existing status classes
+                statusElement.classList.remove('status-connected', 'status-disconnected', 'status-reconnecting');
+                
+                if (cloudStatus.connected) {
+                    statusElement.textContent = 'Connected';
+                    statusElement.classList.add('status-connected');
+                } else if (cloudStatus.reconnectAttempts > 0) {
+                    statusElement.textContent = 'Reconnecting...';
+                    statusElement.classList.add('status-reconnecting');
+                } else {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.classList.add('status-disconnected');
+                }
+                
+                // Add tooltip with more details
+                let title = `Host: ${cloudStatus.host}:${cloudStatus.port}\n`;
+                if (cloudStatus.connected && cloudStatus.lastConnected) {
+                    title += `Connected: ${new Date(cloudStatus.lastConnected).toLocaleString()}`;
+                } else if (cloudStatus.lastError) {
+                    title += `Error: ${cloudStatus.lastError}`;
+                }
+                if (cloudStatus.reconnectAttempts > 0) {
+                    title += `\nReconnect attempts: ${cloudStatus.reconnectAttempts}`;
+                }
+                statusElement.title = title;
             }
 
             renderScales(scales) {

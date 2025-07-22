@@ -104,8 +104,34 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Cloud status endpoint
+app.get('/api/status', (req, res) => {
+  res.json({
+    cloud: {
+      connected: cloudConnectionStatus.connected,
+      lastConnected: cloudConnectionStatus.lastConnected,
+      lastError: cloudConnectionStatus.lastError,
+      reconnectAttempts: cloudConnectionStatus.reconnectAttempts,
+      host: process.env.CLOUD_MQTT_HOST,
+      port: process.env.CLOUD_MQTT_PORT || 1883
+    },
+    edge: {
+      nodeId: process.env.EDGE_NODE_ID || 'edge_001',
+      location: process.env.LOCATION || 'Unknown',
+      uptime: process.uptime(),
+      timestamp: Date.now()
+    }
+  });
+});
+
 // MQTT Cloud Connection
 let cloudMqttClient = null;
+let cloudConnectionStatus = {
+  connected: false,
+  lastConnected: null,
+  lastError: null,
+  reconnectAttempts: 0
+};
 
 function connectToCloud() {
   const cloudHost = process.env.CLOUD_MQTT_HOST;
@@ -115,12 +141,41 @@ function connectToCloud() {
   }
 
   console.log('☁️  Connecting to cloud MQTT...');
+  console.log(`📍 Host: ${cloudHost}:${process.env.CLOUD_MQTT_PORT || 1883}`);
+  console.log(`👤 Username: ${process.env.CLOUD_MQTT_USERNAME}`);
+  console.log(`🔑 Password: ${process.env.CLOUD_MQTT_PASSWORD ? '[SET]' : '[NOT SET]'}`);
   
-  cloudMqttClient = mqtt.connect(`mqtt://${cloudHost}:${process.env.CLOUD_MQTT_PORT || 1883}`);
+  const mqttOptions = {
+    username: process.env.CLOUD_MQTT_USERNAME,
+    password: process.env.CLOUD_MQTT_PASSWORD,
+    connectTimeout: 30000,
+    reconnectPeriod: 5000
+  };
+  
+  cloudMqttClient = mqtt.connect(`mqtt://${cloudHost}:${process.env.CLOUD_MQTT_PORT || 1883}`, mqttOptions);
   
   cloudMqttClient.on('connect', () => {
     console.log('✅ Connected to cloud MQTT');
+    cloudConnectionStatus.connected = true;
+    cloudConnectionStatus.lastConnected = Date.now();
+    cloudConnectionStatus.lastError = null;
+    cloudConnectionStatus.reconnectAttempts = 0;
     cloudMqttClient.subscribe('inventory/+/+');
+  });
+  
+  cloudMqttClient.on('disconnect', () => {
+    console.log('🔌 Disconnected from cloud MQTT');
+    cloudConnectionStatus.connected = false;
+  });
+  
+  cloudMqttClient.on('offline', () => {
+    console.log('📴 Cloud MQTT offline');
+    cloudConnectionStatus.connected = false;
+  });
+  
+  cloudMqttClient.on('reconnect', () => {
+    console.log('🔄 Attempting to reconnect to cloud MQTT...');
+    cloudConnectionStatus.reconnectAttempts++;
   });
   
   cloudMqttClient.on('message', (topic, message) => {
@@ -134,6 +189,8 @@ function connectToCloud() {
   
   cloudMqttClient.on('error', (error) => {
     console.error('❌ Cloud MQTT error:', error);
+    cloudConnectionStatus.connected = false;
+    cloudConnectionStatus.lastError = error.message;
   });
 }
 
