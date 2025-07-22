@@ -145,12 +145,20 @@ function connectToCloud() {
   console.log(`👤 Username: ${process.env.CLOUD_MQTT_USERNAME}`);
   console.log(`🔑 Password: ${process.env.CLOUD_MQTT_PASSWORD ? '[SET]' : '[NOT SET]'}`);
   
+  // Only include authentication if credentials are provided
   const mqttOptions = {
-    username: process.env.CLOUD_MQTT_USERNAME,
-    password: process.env.CLOUD_MQTT_PASSWORD,
     connectTimeout: 30000,
     reconnectPeriod: 5000
   };
+  
+  // Add authentication only if both username and password are provided
+  if (process.env.CLOUD_MQTT_USERNAME && process.env.CLOUD_MQTT_PASSWORD) {
+    mqttOptions.username = process.env.CLOUD_MQTT_USERNAME;
+    mqttOptions.password = process.env.CLOUD_MQTT_PASSWORD;
+    console.log(`👤 Using authentication: ${process.env.CLOUD_MQTT_USERNAME}`);
+  } else {
+    console.log('🔓 Using anonymous MQTT connection (no credentials)');
+  }
   
   cloudMqttClient = mqtt.connect(`mqtt://${cloudHost}:${process.env.CLOUD_MQTT_PORT || 1883}`, mqttOptions);
   
