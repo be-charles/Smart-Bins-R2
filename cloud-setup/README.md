@@ -35,20 +35,34 @@ git clone https://github.com/your-repo/smart-bins-r2.git
 cd smart-bins-r2/cloud-setup
 ```
 
-### 4. Run Deployment Script
+### 4. Run Official Installation Script (Recommended)
 
 ```bash
 cd cloud-setup
-chmod +x deploy.sh
-./deploy.sh
+chmod +x cedalo-install.sh
+./cedalo-install.sh
 ```
 
+**Why use the official installer?**
+- ✅ Uses official `cedalo/installer` (stable, tested)
+- ✅ No authentication conflicts or installation loops
+- ✅ Standard admin/1234 credentials
+- ✅ Proper data persistence
+- ✅ Official support and documentation
+
 The script will:
-- Install Docker and Docker Compose
-- Create necessary directories
-- Pull required Docker images
-- Start Eclipse Streamsheets and MQTT broker
-- Display access URLs
+- Install Docker (if needed)
+- Clean up any existing installations
+- Run the official Cedalo installer (interactive)
+- Start services using official scripts
+- Provide access information
+
+**Alternative (Legacy):**
+```bash
+chmod +x install.sh
+./install.sh
+```
+*Note: The legacy script has known issues with installation loops. Use the official installer instead.*
 
 ## Services Included
 
@@ -110,12 +124,12 @@ MQTT_PASSWORD=your_password
 
 ## Accessing Streamsheets
 
-1. **Web Interface**: `http://your-droplet-ip:8080`
+1. **Web Interface**: `http://your-droplet-ip:8081`
 2. **Admin Panel**: `http://your-droplet-ip:9000`
 
 ### Default Login
 - **Username**: `admin`
-- **Password**: `admin`
+- **Password**: `1234`
 
 **⚠️ Change default credentials immediately in production!**
 
@@ -224,6 +238,25 @@ chmod +x fix-streamsheets.sh
 **New credentials after fix**:
 - Username: `admin`
 - Password: `changeme123`
+
+### 🚫 502 Bad Gateway Error (AFTER RUNNING FIX)
+
+**Problem**: After running the Streamsheets fix, you get "502 Bad Gateway nginx/1.14.2" error.
+
+**Cause**: Initial fix attempted to separate MongoDB service, but Streamsheets all-in-one image doesn't support external MongoDB.
+
+**Solution**: Run the updated fix script (it now uses the correct approach):
+
+```bash
+# Run the corrected fix script
+./fix-streamsheets.sh
+```
+
+**What the corrected fix does**:
+- Uses all-in-one Streamsheets image (as designed)
+- Maps internal MongoDB to persistent volume
+- Sets fixed admin credentials
+- Avoids service separation issues
 
 **Manual fix** (if script doesn't work):
 ```bash
