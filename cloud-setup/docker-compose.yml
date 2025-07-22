@@ -1,12 +1,24 @@
-version: '3.8'
+version: '3.9'
 
 services:
+  # Separate MongoDB service with persistent volume
+  mongodb:
+    image: mongo:6
+    container_name: smart-bins-mongodb
+    restart: unless-stopped
+    volumes:
+      - streamsheets_mongo:/data/db    # Named volume for persistence
+    networks:
+      - smart-bins-network
+    environment:
+      - MONGO_INITDB_DATABASE=streamsheets
+
+  # Streamsheets core service
   streamsheets:
     image: cedalo/streamsheets:latest
     container_name: smart-bins-streamsheets
     ports:
       - "1883:1883"    # MQTT Broker
-      - "27017:27017"  # MongoDB
       - "6379:6379"    # Redis
       - "8080:8080"    # Streamsheets Web UI
       - "8081:8081"    # Streamsheets Gateway
@@ -23,6 +35,15 @@ services:
       - STREAMSHEETS_ADMIN_PORT=9000
       - MQTT_HOST=localhost
       - MQTT_PORT=1883
+      # Fixed admin credentials - prevents password reset loop
+      - STREAMSHEETS_ADMIN_USER=admin
+      - STREAMSHEETS_ADMIN_PASSWORD=changeme123
+      # MongoDB connection
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_DATABASE=streamsheets
+    depends_on:
+      - mongodb
     restart: unless-stopped
     networks:
       - smart-bins-network
@@ -47,6 +68,8 @@ volumes:
   streamsheets_data:
     driver: local
   streamsheets_logs:
+    driver: local
+  streamsheets_mongo:
     driver: local
   mosquitto_data:
     driver: local

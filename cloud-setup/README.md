@@ -207,6 +207,35 @@ docker run --rm -v smart-bins_mosquitto_data:/data -v $(pwd)/backups/$(date +%Y%
 
 ## Troubleshooting
 
+### 🔄 Installation Loop Issue (COMMON PROBLEM)
+
+**Problem**: After accepting terms of service and running a demo sheet, you're sent back to the installation wizard, and the default credentials (admin/1234) no longer work.
+
+**Cause**: Anonymous MongoDB volumes that get deleted on container restart, causing data loss.
+
+**Solution**: Use the recovery script:
+
+```bash
+# Run the fix script
+chmod +x fix-streamsheets.sh
+./fix-streamsheets.sh
+```
+
+**New credentials after fix**:
+- Username: `admin`
+- Password: `changeme123`
+
+**Manual fix** (if script doesn't work):
+```bash
+# Stop containers and clean volumes
+docker-compose down
+docker-compose rm -svf mongodb streamsheets
+docker volume prune -f
+
+# Restart with fixed configuration
+docker-compose up -d
+```
+
 ### Services Won't Start
 
 ```bash
@@ -248,6 +277,27 @@ mosquitto_sub -h localhost -p 1883 -t test/topic
 ```bash
 docker-compose logs mosquitto
 ```
+
+### Memory Issues (1GB Droplets)
+
+If using a 1GB droplet, you may experience out-of-memory (OOM) kills:
+
+```bash
+# Add swap space (recommended for 1GB droplets)
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# Make swap permanent
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Monitor memory usage
+docker stats
+free -h
+```
+
+**Recommendation**: Use at least 2GB RAM droplet for stable operation.
 
 ## Security Considerations
 
