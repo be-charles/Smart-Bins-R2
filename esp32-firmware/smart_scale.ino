@@ -18,6 +18,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <HX711.h>
+#include <Preferences.h>
 
 // Include configuration files
 #include "config.h"
@@ -26,13 +27,14 @@
 // Hardware Configuration
 #define HX711_DOUT_PIN  4
 #define HX711_SCK_PIN   5
-#define CALIBRATION_BUTTON_PIN 2
+#define CALIBRATION_BUTTON_PIN 12
 #define TARE_BUTTON_PIN 3
 
 // Global Objects
 HX711 scale;
 WiFiClient espClient;
 PubSubClient client(espClient);
+Preferences preferences;
 
 // Variables
 float current_weight = 0.0;
@@ -40,6 +42,10 @@ float previous_weight = 0.0;
 int item_count = 0;
 unsigned long last_reading = 0;
 unsigned long last_mqtt_attempt = 0;
+bool calibration_in_progress = false;
+unsigned long calibration_start_time = 0;
+bool calibration_valid = false;
+float stored_calibration_factor = CALIBRATION_FACTOR;
 
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
@@ -49,12 +55,21 @@ void setup() {
   pinMode(CALIBRATION_BUTTON_PIN, INPUT_PULLUP);
   pinMode(TARE_BUTTON_PIN, INPUT_PULLUP);
   
+  // Initialize preferences
+  preferences.begin("scale", false);
+  
+  // Load calibration status
+  load_calibration_status();
+  
   // Initialize HX711
   scale.begin(HX711_DOUT_PIN, HX711_SCK_PIN);
-  scale.set_scale(CALIBRATION_FACTOR);
+  scale.set_scale(stored_calibration_factor);
   scale.tare(); // Reset scale to 0
   
   Serial.println("Scale initialized and tared");
+  
+  // Display calibration status
+  display_calibration_status();
   
   // Connect to WiFi
   setup_wifi();
@@ -146,7 +161,18 @@ void reconnect_mqtt() {
   
   Serial.print("Attempting MQTT connection...");
   
-  if (client.connect(MQTT_CLIENT_ID)) {
+  // Try connection with authentication if credentials are defined
+  bool connected = false;
+  
+  #ifdef MQTT_USERNAME
+    Serial.print(" (with auth)...");
+    connected = client.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
+  #else
+    Serial.print(" (anonymous)...");
+    connected = client.connect(MQTT_CLIENT_ID);
+  #endif
+  
+  if (connected) {
     Serial.println("connected");
     
     // Subscribe to command topic
@@ -159,7 +185,24 @@ void reconnect_mqtt() {
   } else {
     Serial.print("failed, rc=");
     Serial.print(client.state());
-    Serial.println(" try again in 5 seconds");
+    Serial.print(" (");
+    
+    // Print human-readable error codes
+    switch(client.state()) {
+      case -4: Serial.print("MQTT_CONNECTION_TIMEOUT"); break;
+      case -3: Serial.print("MQTT_CONNECTION_LOST"); break;
+      case -2: Serial.print("MQTT_CONNECT_FAILED"); break;
+      case -1: Serial.print("MQTT_DISCONNECTED"); break;
+      case 0: Serial.print("MQTT_CONNECTED"); break;
+      case 1: Serial.print("MQTT_CONNECT_BAD_PROTOCOL"); break;
+      case 2: Serial.print("MQTT_CONNECT_BAD_CLIENT_ID"); break;
+      case 3: Serial.print("MQTT_CONNECT_UNAVAILABLE"); break;
+      case 4: Serial.print("MQTT_CONNECT_BAD_CREDENTIALS"); break;
+      case 5: Serial.print("MQTT_CONNECT_UNAUTHORIZED"); break;
+      default: Serial.print("UNKNOWN_ERROR"); break;
+    }
+    
+    Serial.println(") try again in 5 seconds");
   }
 }
 
@@ -235,13 +278,36 @@ void publish_status(const char* status) {
 }
 
 void handle_buttons() {
-  // Tare button
+  // Skip button handling if calibration is in progress
+  if (calibration_in_progress) {
+    return;
+  }
+  
+  // Tare button - short press for tare, long press for recalibration
   if (digitalRead(TARE_BUTTON_PIN) == LOW) {
     delay(DEBOUNCE_DELAY); // Debounce
     if (digitalRead(TARE_BUTTON_PIN) == LOW) {
-      scale.tare();
-      Serial.println("Scale tared");
-      publish_status("tared");
+      unsigned long button_start = millis();
+      
+      // Wait to see if it's a long press
+      while (digitalRead(TARE_BUTTON_PIN) == LOW && 
+             (millis() - button_start) < BUTTON_HOLD_TIME) {
+        delay(BUTTON_POLL_DELAY);
+      }
+      
+      if ((millis() - button_start) >= BUTTON_HOLD_TIME) {
+        // Long press - force recalibration
+        Serial.println("🔄 Long press detected - forcing recalibration");
+        reset_calibration_status();
+        calibrate_scale();
+      } else {
+        // Short press - normal tare
+        scale.tare();
+        Serial.println("Scale tared");
+        publish_status("tared");
+      }
+      
+      // Wait for button release
       while (digitalRead(TARE_BUTTON_PIN) == LOW) {
         delay(BUTTON_POLL_DELAY);
       }
@@ -263,19 +329,192 @@ void handle_buttons() {
 }
 
 void calibrate_scale() {
-  Serial.println("Starting calibration...");
-  Serial.println("Remove all weight from scale and press tare button");
-  
-  // Wait for tare button
-  while (digitalRead(TARE_BUTTON_PIN) == HIGH) {
-    delay(CALIBRATION_WAIT_DELAY);
+  // Prevent re-entry during calibration
+  if (calibration_in_progress) {
+    Serial.println("Calibration already in progress, ignoring request");
+    return;
   }
   
-  scale.tare();
-  Serial.println("Scale tared. Place known weight and enter weight in Serial Monitor");
+  calibration_in_progress = true;
+  calibration_start_time = millis();
   
-  // In a real implementation, you would read the known weight from serial
-  // For now, we'll use a default calibration
-  Serial.println("Using default calibration factor");
+  Serial.println("=== CALIBRATION MODE STARTED ===");
+  Serial.print("Step 1: Remove all weight from scale and press tare button");
+  publish_status("calibrating");
+  
+  // Wait for tare button with timeout
+  unsigned long tare_wait_start = millis();
+  const unsigned long TARE_TIMEOUT = 30000; // 30 seconds timeout
+  
+  while (digitalRead(TARE_BUTTON_PIN) == HIGH) {
+    delay(CALIBRATION_WAIT_DELAY);
+    
+    // Check for timeout
+    if (millis() - tare_wait_start > TARE_TIMEOUT) {
+      Serial.println("Calibration timeout - no tare button pressed");
+      Serial.println("Calibration cancelled");
+      calibration_in_progress = false;
+      publish_status("calibration_timeout");
+      return;
+    }
+    
+    // Allow MQTT and WiFi to continue working
+    if (!client.connected()) {
+      reconnect_mqtt();
+    }
+    client.loop();
+  }
+  
+  // Debounce tare button
+  delay(DEBOUNCE_DELAY);
+  if (digitalRead(TARE_BUTTON_PIN) == HIGH) {
+    // False trigger, restart wait
+    Serial.println("False tare trigger, continue waiting...");
+    return; // This will exit and calibration_in_progress will remain true
+  }
+  
+  // Tare the scale
+  scale.tare();
+  Serial.println("✓ Scale tared successfully");
+  
+  // Wait for tare button release
+  while (digitalRead(TARE_BUTTON_PIN) == LOW) {
+    delay(BUTTON_POLL_DELAY);
+  }
+  
+  Serial.println("Step 2: Place calibration weight on scale");
+  Serial.print("Place exactly ");
+  Serial.print(CALIBRATION_KNOWN_WEIGHT);
+  Serial.println(" kg on the scale");
+  Serial.println("Then press the calibration button again to complete calibration");
+  
+  // Wait for calibration button press to complete calibration
+  unsigned long calibration_wait_start = millis();
+  const unsigned long CALIBRATION_TIMEOUT = 60000; // 60 seconds timeout
+  
+  while (digitalRead(CALIBRATION_BUTTON_PIN) == HIGH) {
+    delay(CALIBRATION_WAIT_DELAY);
+    
+    // Check for timeout
+    if (millis() - calibration_wait_start > CALIBRATION_TIMEOUT) {
+      Serial.println("Calibration timeout - no calibration button pressed");
+      Serial.println("Calibration cancelled");
+      calibration_in_progress = false;
+      publish_status("calibration_timeout");
+      return;
+    }
+    
+    // Allow MQTT and WiFi to continue working
+    if (!client.connected()) {
+      reconnect_mqtt();
+    }
+    client.loop();
+  }
+  
+  // Debounce calibration button
+  delay(DEBOUNCE_DELAY);
+  if (digitalRead(CALIBRATION_BUTTON_PIN) == HIGH) {
+    // False trigger, continue waiting
+    Serial.println("False calibration trigger, continue waiting...");
+    return; // This will exit and calibration_in_progress will remain true
+  }
+  
+  // Wait for button release
+  while (digitalRead(CALIBRATION_BUTTON_PIN) == LOW) {
+    delay(BUTTON_POLL_DELAY);
+  }
+  
+  // Calculate new calibration factor using known weight
+  Serial.println("✓ Calculating calibration factor...");
+  long raw_reading = scale.get_value(10); // Average of 10 readings
+  
+  if (raw_reading != 0) {
+    float new_calibration_factor = raw_reading / CALIBRATION_KNOWN_WEIGHT;
+    scale.set_scale(new_calibration_factor);
+    
+    Serial.print("Raw reading: ");
+    Serial.println(raw_reading);
+    Serial.print("Known weight: ");
+    Serial.print(CALIBRATION_KNOWN_WEIGHT);
+    Serial.println(" kg");
+    Serial.print("New calibration factor: ");
+    Serial.println(new_calibration_factor);
+    Serial.println("✓ Calibration completed successfully");
+  } else {
+    Serial.println("Error: No weight detected on scale");
+    Serial.println("Make sure the calibration weight is properly placed");
+    Serial.println("Using previous calibration factor");
+  }
+  
+  // Finalize calibration
+  Serial.println("=== CALIBRATION COMPLETED ===");
+  Serial.println("Remove calibration weight and resume normal operation");
+  
+  // Reset calibration state
+  calibration_in_progress = false;
   publish_status("calibrated");
+  
+  // Store successful calibration
+  if (raw_reading != 0) {
+    save_calibration_status(new_calibration_factor);
+  }
+  
+  // Brief delay before resuming normal operation
+  delay(2000);
+}
+
+// Load calibration status from preferences
+void load_calibration_status() {
+  calibration_valid = preferences.getBool("cal_valid", false);
+  stored_calibration_factor = preferences.getFloat("cal_factor", CALIBRATION_FACTOR);
+  
+  Serial.print("Loaded calibration status: ");
+  Serial.println(calibration_valid ? "VALID" : "INVALID");
+  Serial.print("Stored calibration factor: ");
+  Serial.println(stored_calibration_factor);
+}
+
+// Save calibration status to preferences
+void save_calibration_status(float calibration_factor) {
+  preferences.putBool("cal_valid", true);
+  preferences.putFloat("cal_factor", calibration_factor);
+  preferences.putULong("cal_timestamp", millis());
+  
+  calibration_valid = true;
+  stored_calibration_factor = calibration_factor;
+  
+  Serial.println("✓ Calibration status saved to memory");
+}
+
+// Display current calibration status
+void display_calibration_status() {
+  Serial.println("=== CALIBRATION STATUS ===");
+  if (calibration_valid) {
+    Serial.println("Status: CALIBRATED");
+    Serial.print("Calibration factor: ");
+    Serial.println(stored_calibration_factor);
+    unsigned long cal_time = preferences.getULong("cal_timestamp", 0);
+    Serial.print("Last calibrated: ");
+    Serial.print(cal_time);
+    Serial.println(" ms ago");
+  } else {
+    Serial.println("Status: NEEDS CALIBRATION");
+    Serial.println("Using default calibration factor from config.h");
+    Serial.println("⚠️  Scale may not be accurate until properly calibrated");
+    Serial.println("Hold calibration button (pin 12) for 3 seconds to calibrate");
+    Serial.println("Or hold tare button (pin 3) for 3 seconds to force recalibration");
+  }
+  Serial.println("========================");
+}
+
+// Reset calibration status (for testing/debugging)
+void reset_calibration_status() {
+  preferences.putBool("cal_valid", false);
+  preferences.remove("cal_factor");
+  preferences.remove("cal_timestamp");
+  
+  calibration_valid = false;
+  stored_calibration_factor = CALIBRATION_FACTOR;
+  
+  Serial.println("⚠️  Calibration status reset - scale needs recalibration");
 }

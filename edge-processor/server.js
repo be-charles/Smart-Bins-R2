@@ -104,9 +104,17 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Cloud status endpoint
+// MQTT status endpoint
 app.get('/api/status', (req, res) => {
   res.json({
+    local: {
+      connected: localConnectionStatus.connected,
+      lastConnected: localConnectionStatus.lastConnected,
+      lastError: localConnectionStatus.lastError,
+      reconnectAttempts: localConnectionStatus.reconnectAttempts,
+      host: process.env.LOCAL_MQTT_HOST,
+      port: process.env.LOCAL_MQTT_PORT || 1883
+    },
     cloud: {
       connected: cloudConnectionStatus.connected,
       lastConnected: cloudConnectionStatus.lastConnected,
@@ -124,14 +132,105 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// MQTT Cloud Connection
+// MQTT Connections
+let localMqttClient = null;
 let cloudMqttClient = null;
+
+let localConnectionStatus = {
+  connected: false,
+  lastConnected: null,
+  lastError: null,
+  reconnectAttempts: 0
+};
+
 let cloudConnectionStatus = {
   connected: false,
   lastConnected: null,
   lastError: null,
   reconnectAttempts: 0
 };
+
+function connectToLocal() {
+  const localHost = process.env.LOCAL_MQTT_HOST;
+  if (!localHost) {
+    console.log('⚠️  Local MQTT not configured');
+    return;
+  }
+
+  console.log('🏠 Connecting to local MQTT broker...');
+  console.log(`📍 Host: ${localHost}:${process.env.LOCAL_MQTT_PORT || 1883}`);
+  console.log(`👤 Username: ${process.env.LOCAL_MQTT_USERNAME}`);
+  console.log(`🔑 Password: ${process.env.LOCAL_MQTT_PASSWORD ? '[SET]' : '[NOT SET]'}`);
+  
+  const mqttOptions = {
+    connectTimeout: 10000,
+    reconnectPeriod: 5000
+  };
+  
+  // Add authentication if credentials are provided
+  if (process.env.LOCAL_MQTT_USERNAME && process.env.LOCAL_MQTT_PASSWORD) {
+    mqttOptions.username = process.env.LOCAL_MQTT_USERNAME;
+    mqttOptions.password = process.env.LOCAL_MQTT_PASSWORD;
+    console.log(`👤 Using local authentication: ${process.env.LOCAL_MQTT_USERNAME}`);
+  } else {
+    console.log('🔓 Using anonymous local MQTT connection');
+  }
+  
+  localMqttClient = mqtt.connect(`mqtt://${localHost}:${process.env.LOCAL_MQTT_PORT || 1883}`, mqttOptions);
+  
+  localMqttClient.on('connect', () => {
+    console.log('✅ Connected to local MQTT broker');
+    localConnectionStatus.connected = true;
+    localConnectionStatus.lastConnected = Date.now();
+    localConnectionStatus.lastError = null;
+    localConnectionStatus.reconnectAttempts = 0;
+    
+    // Subscribe to ESP32 scale topics
+    localMqttClient.subscribe('inventory/scale/+');
+    localMqttClient.subscribe('inventory/scale/+/status');
+    localMqttClient.subscribe('inventory/scale/+/commands');
+    console.log('📡 Subscribed to ESP32 scale topics');
+  });
+  
+  localMqttClient.on('disconnect', () => {
+    console.log('🔌 Disconnected from local MQTT broker');
+    localConnectionStatus.connected = false;
+  });
+  
+  localMqttClient.on('offline', () => {
+    console.log('📴 Local MQTT broker offline');
+    localConnectionStatus.connected = false;
+  });
+  
+  localMqttClient.on('reconnect', () => {
+    console.log('🔄 Attempting to reconnect to local MQTT broker...');
+    localConnectionStatus.reconnectAttempts++;
+  });
+  
+  localMqttClient.on('message', (topic, message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      console.log('📨 Received from ESP32:', topic, data);
+      
+      // Handle different message types
+      if (topic.includes('/status')) {
+        console.log('📊 ESP32 status update:', data);
+      } else if (topic.startsWith('inventory/scale/')) {
+        // This is scale data - save to database and forward to cloud
+        handleScaleData(topic, data);
+      }
+    } catch (error) {
+      console.error('❌ Error parsing local MQTT message:', error);
+      console.error('Raw message:', message.toString());
+    }
+  });
+  
+  localMqttClient.on('error', (error) => {
+    console.error('❌ Local MQTT error:', error);
+    localConnectionStatus.connected = false;
+    localConnectionStatus.lastError = error.message;
+  });
+}
 
 function connectToCloud() {
   const cloudHost = process.env.CLOUD_MQTT_HOST;
@@ -155,9 +254,9 @@ function connectToCloud() {
   if (process.env.CLOUD_MQTT_USERNAME && process.env.CLOUD_MQTT_PASSWORD) {
     mqttOptions.username = process.env.CLOUD_MQTT_USERNAME;
     mqttOptions.password = process.env.CLOUD_MQTT_PASSWORD;
-    console.log(`👤 Using authentication: ${process.env.CLOUD_MQTT_USERNAME}`);
+    console.log(`👤 Using cloud authentication: ${process.env.CLOUD_MQTT_USERNAME}`);
   } else {
-    console.log('🔓 Using anonymous MQTT connection (no credentials)');
+    console.log('🔓 Using anonymous cloud MQTT connection');
   }
   
   cloudMqttClient = mqtt.connect(`mqtt://${cloudHost}:${process.env.CLOUD_MQTT_PORT || 1883}`, mqttOptions);
@@ -168,7 +267,7 @@ function connectToCloud() {
     cloudConnectionStatus.lastConnected = Date.now();
     cloudConnectionStatus.lastError = null;
     cloudConnectionStatus.reconnectAttempts = 0;
-    cloudMqttClient.subscribe('inventory/+/+');
+    cloudMqttClient.subscribe('inventory/+/+/commands');
   });
   
   cloudMqttClient.on('disconnect', () => {
@@ -190,6 +289,11 @@ function connectToCloud() {
     try {
       const data = JSON.parse(message.toString());
       console.log('📨 Received from cloud:', topic, data);
+      
+      // Forward cloud commands to local ESP32 devices
+      if (topic.includes('/commands')) {
+        forwardCommandToLocal(topic, data);
+      }
     } catch (error) {
       console.error('❌ Error parsing cloud message:', error);
     }
@@ -200,6 +304,47 @@ function connectToCloud() {
     cloudConnectionStatus.connected = false;
     cloudConnectionStatus.lastError = error.message;
   });
+}
+
+// Handle scale data from ESP32
+function handleScaleData(topic, data) {
+  try {
+    // Save to local database
+    saveScaleReading(data);
+    
+    // Forward to cloud if connected
+    if (cloudMqttClient && cloudConnectionStatus.connected) {
+      const cloudTopic = topic; // Use same topic structure
+      cloudMqttClient.publish(cloudTopic, JSON.stringify(data), { qos: 1 }, (error) => {
+        if (error) {
+          console.error('❌ Failed to forward data to cloud:', error);
+        } else {
+          console.log('☁️  Forwarded scale data to cloud:', data.scale_id, 'TOPIC:', cloudTopic);
+        }
+      });
+    } else {
+      console.log('⚠️  Cloud not connected - data saved locally only');
+    }
+  } catch (error) {
+    console.error('❌ Error handling scale data:', error);
+  }
+}
+
+// Forward commands from cloud to local ESP32
+function forwardCommandToLocal(topic, data) {
+  if (localMqttClient && localConnectionStatus.connected) {
+    // Convert cloud topic to local topic format
+    const localTopic = topic.replace('/commands', '/commands');
+    localMqttClient.publish(localTopic, JSON.stringify(data), { qos: 1 }, (error) => {
+      if (error) {
+        console.error('❌ Failed to forward command to local:', error);
+      } else {
+        console.log('🏠 Forwarded command to local ESP32:', localTopic);
+      }
+    });
+  } else {
+    console.log('⚠️  Local MQTT not connected - cannot forward command');
+  }
 }
 
 // Function to save scale reading to database
@@ -226,6 +371,7 @@ function saveScaleReading(data) {
 }
 
 // Start server
+connectToLocal();
 connectToCloud();
 
 app.listen(PORT, () => {
@@ -238,13 +384,21 @@ app.listen(PORT, () => {
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down Edge Processor...');
   
+  if (localMqttClient) {
+    console.log('🏠 Closing local MQTT connection...');
+    localMqttClient.end();
+  }
+  
   if (cloudMqttClient) {
+    console.log('☁️  Closing cloud MQTT connection...');
     cloudMqttClient.end();
   }
   
   if (db) {
+    console.log('💾 Closing database connection...');
     db.close();
   }
   
+  console.log('✅ Shutdown complete');
   process.exit(0);
 });
